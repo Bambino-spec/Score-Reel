@@ -107,7 +107,16 @@ audio.preload = "auto";
 audio.setAttribute("controlsList","nodownload");
 let tracks = [], current = -1, peaks = null, blobUrl = null;
 const cache = {};
-const still = matchMedia("(prefers-reduced-motion: reduce)").matches;
+const iOS = /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform==="MacIntel" && navigator.maxTouchPoints>1);
+const still = iOS || matchMedia("(prefers-reduced-motion: reduce)").matches;
+const MIME = {mp3:"audio/mpeg",m4a:"audio/mp4",aac:"audio/aac",ogg:"audio/ogg",wav:"audio/wav",flac:"audio/flac"};
+const SILENT = "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=";
+let unlocked = false;
+function unlock(){
+  // Must run inside the tap, before any waiting, so iPhone allows playback later
+  if(unlocked) return; unlocked = true;
+  audio.src = SILENT; const p = audio.play(); p && p.catch(()=>{});
+}
 
 // Wordmark letters
 const letters = [..."pattyboomba"].map(c => { const s=document.createElement("span"); s.textContent=c; s.setAttribute("aria-hidden","true"); $("mark").appendChild(s); return s; });
@@ -138,7 +147,7 @@ async function loadList(){
     try{ files = await (await fetch(`${CONFIG.folder}/tracks.json`)).json(); }catch{}
   }
   files.sort((a,b)=>a.localeCompare(b,undefined,{numeric:true}));
-  tracks = files.map(f => ({title:pretty(f), src:`${CONFIG.folder}/${encodeURIComponent(f)}`}));
+  tracks = files.map(f => ({title:pretty(f), ext:(f.split('.').pop()||'').toLowerCase(), src:`${CONFIG.folder}/${encodeURIComponent(f)}`}));
   render();
 }
 
@@ -150,7 +159,7 @@ function render(){
     const li = document.createElement("li");
     li.innerHTML = `<button class="cue"><span class="n">${i+1}</span><span class="name"></span><span class="d" id="d${i}"></span></button>`;
     li.querySelector(".name").textContent = t.title;
-    li.firstChild.onclick = () => i===current ? toggle() : select(i,true);
+    li.firstChild.onclick = () => { unlock(); startViz(); i===current ? toggle() : select(i,true); };
     ol.appendChild(li);
     const probe = new Audio(); probe.preload="metadata"; probe.src=t.src;
     probe.onloadedmetadata = () => { $("d"+i).textContent = fmt(probe.duration); };
@@ -165,9 +174,9 @@ async function select(i, autoplay){
   if(!buf){ buf = await (await fetch(tracks[i].src)).arrayBuffer(); cache[i]=buf; }
   if(current!==i) return;
   if(blobUrl) URL.revokeObjectURL(blobUrl);
-  blobUrl = URL.createObjectURL(new Blob([buf]));
+  blobUrl = URL.createObjectURL(new Blob([buf], {type: MIME[tracks[i].ext] || "audio/mpeg"}));
   audio.src = blobUrl;
-  if(autoplay){ startViz(); audio.play(); }
+  if(autoplay){ actx && actx.resume(); const p = audio.play(); p && p.catch(()=>{}); }
   buildPeaks(buf.slice(0), i);
 }
 
@@ -186,9 +195,11 @@ async function buildPeaks(buf, i){
 // Wordmark reacts to the music
 let actx, analyser, bins;
 function startViz(){
-  if(analyser || still) return;
+  if(actx){ actx.resume(); return; }
+  if(still) return;
   try{
     actx = new (window.AudioContext||window.webkitAudioContext)();
+    actx.resume();
     analyser = actx.createAnalyser(); analyser.fftSize = 64; analyser.smoothingTimeConstant = .8;
     actx.createMediaElementSource(audio).connect(analyser); analyser.connect(actx.destination);
     bins = new Uint8Array(analyser.frequencyBinCount);
@@ -201,8 +212,8 @@ function startViz(){
 }
 
 function toggle(){
+  unlock(); startViz();
   if(current<0 && tracks.length) return select(0,true);
-  startViz(); actx && actx.resume();
   audio.paused ? audio.play() : audio.pause();
 }
 
@@ -232,10 +243,10 @@ $("play").onclick = toggle;
 document.addEventListener("keydown",e=>{ if(e.code==="Space" && e.target===document.body){e.preventDefault();toggle();} });
 
 const PLAY='<path d="M7 4.5v15l13-7.5z"/>', PAUSE='<path d="M6 4h4v16H6zM14 4h4v16h-4z"/>';
-audio.onplay = () => { $("ico").innerHTML=PAUSE; $("play").setAttribute("aria-label","Pause"); };
+audio.onplay = () => { if(!audio.src.startsWith("blob:")) return; $("ico").innerHTML=PAUSE; $("play").setAttribute("aria-label","Pause"); };
 audio.onpause = () => { $("ico").innerHTML=PLAY; $("play").setAttribute("aria-label","Play"); };
 audio.ontimeupdate = () => { $("time").textContent = fmt(audio.currentTime)+" / "+fmt(audio.duration); draw(); };
-audio.onended = () => { if(current < tracks.length-1) select(current+1,true); };
+audio.onended = () => { if(!audio.src.startsWith("blob:")) return; if(current < tracks.length-1) select(current+1,true); };
 addEventListener("resize", draw);
 
 draw();
