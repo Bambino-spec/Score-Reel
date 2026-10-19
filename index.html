@@ -138,22 +138,27 @@ function repoInfo(){
 
 async function loadList(){
   const {owner,repo} = repoInfo();
-  let files = [];
-  try{
-    const r = await fetch(`https://api.github.com/repos/${owner}/${repo}/contents/${CONFIG.folder}?ref=${CONFIG.branch}`);
-    if(!r.ok) throw 0;
-    files = (await r.json()).filter(f => EXT.test(f.name)).map(f => f.name);
-  }catch{
-    try{ files = await (await fetch(`${CONFIG.folder}/tracks.json`)).json(); }catch{}
+  const api = p => `https://api.github.com/repos/${owner}/${repo}/contents/${p}?ref=${CONFIG.branch}`;
+  let found = [];
+  // Reads tracks from the main folder AND the /music folder, so it doesn't matter where you upload them
+  for(const p of ["", CONFIG.folder]){
+    try{
+      const r = await fetch(api(p));
+      if(r.ok) found.push(...(await r.json()).filter(f => f.type==="file" && EXT.test(f.name)).map(f => ({name:f.name, path:f.path})));
+    }catch{}
   }
-  files.sort((a,b)=>a.localeCompare(b,undefined,{numeric:true}));
-  tracks = files.map(f => ({title:pretty(f), ext:(f.split('.').pop()||'').toLowerCase(), src:`${CONFIG.folder}/${encodeURIComponent(f)}`}));
+  if(!found.length){
+    try{ found = (await (await fetch(`${CONFIG.folder}/tracks.json`)).json()).map(n => ({name:n, path:`${CONFIG.folder}/${n}`})); }catch{}
+  }
+  const seen = new Set(); found = found.filter(f => !seen.has(f.name) && seen.add(f.name));
+  found.sort((a,b)=>a.name.localeCompare(b.name,undefined,{numeric:true}));
+  tracks = found.map(f => ({title:pretty(f.name), ext:(f.name.split('.').pop()||'').toLowerCase(), src:f.path.split('/').map(encodeURIComponent).join('/')}));
   render();
 }
 
 function render(){
   const ol = $("list");
-  if(!tracks.length){ ol.innerHTML = `<li class="msg">nothing here yet. drop audio into the /${CONFIG.folder} folder.</li>`; return; }
+  if(!tracks.length){ ol.innerHTML = `<li class="msg">nothing here yet. upload some audio files to the repo.</li>`; return; }
   ol.innerHTML = "";
   tracks.forEach((t,i)=>{
     const li = document.createElement("li");
